@@ -1,0 +1,36 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, build output
+*.test
+*.out
+
+# Go build cache
+*.o
+*.a
+*.obj
+*.elf
+*.gob
+*.cache
+
+# Dependency directories (vendor/)
+vendor/
+
+# IDE / Editor files
+.vscode/
+.idea/
+*.swp
+
+# Mac / Linux / Windows dosyaları
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Env
+.env
