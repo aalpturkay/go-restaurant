@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="tr">
+  <head>
+    <meta charset="utf-8" />
+    <title>Canlı Siparişler (SSE)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      :root {
+        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto,
+          Arial;
+      }
+
+      body {
+        margin: 24px;
+      }
+
+      h1 {
+        margin: 0 0 16px;
+      }
+
+      .status {
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-size: 12px;
+        text-transform: capitalize;
+        display: inline-block;
+      }
+
+      .pending {
+        background: #fff1c2;
+      }
+
+      .rejected {
+        background: #ffd1d1;
+      }
+
+      .preparing {
+        background: #cfe8ff;
+      }
+
+      .ready {
+        background: #c9f7d5;
+      }
+
+      .wrap {
+        overflow-x: auto;
+      }
+
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        min-width: 720px;
+      }
+
+      th,
+      td {
+        border-bottom: 1px solid #e5e7eb;
+        padding: 10px 8px;
+        text-align: left;
+      }
+
+      th {
+        background: #f8fafc;
+        position: sticky;
+        top: 0;
+      }
+
+      tr.highlight {
+        animation: flash 1.2s ease-out;
+      }
+
+      @keyframes flash {
+        from {
+          background: #fffbeb;
+        }
+
+        to {
+          background: #fff;
+        }
+      }
+
+      .pill {
+        font-size: 12px;
+        padding: 2px 6px;
+        border: 1px solid #e5e7eb;
+        border-radius: 6px;
+        background: #fff;
+      }
+
+      .muted {
+        color: #6b7280;
+        font-size: 12px;
+      }
+
+      .row-actions {
+        white-space: nowrap;
+      }
+
+      .counter {
+        margin-bottom: 10px;
+        color: #374151;
+      }
+    </style>
+  </head>
+
+  <body>
+    <h1>🍔 Canlı Siparişler</h1>
+    <div class="counter"><span id="connState">Bağlanıyor…</span></div>
+
+    <div class="wrap">
+      <table id="ordersTable">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Kullanıcı</th>
+            <th>Restoran</th>
+            <th>Durum</th>
+            <th>Ürünler</th>
+            <th>Oluşturma</th>
+            <th>Güncelleme</th>
+          </tr>
+        </thead>
+        <tbody id="ordersBody"></tbody>
+      </table>
+    </div>
+
+    <p class="muted" style="margin-top: 12px">
+      Test için örnek:
+      <code
+        >curl -X POST http://localhost:8888/orders -H "Content-Type:
+        application/json" -d
+        '{"user_id":1,"restaurant_id":42,"items":[{"name":"Burger","quantity":1},{"name":"Kola","quantity":2}]}'</code
+      ><br />
+      Durum güncelle:
+      <code
+        >curl -X PATCH
+        http://localhost:8888/restaurants/42/orders/&lt;ID&gt;/status -H
+        "Content-Type: application/json" -d '{"status":"preparing"}'</code
+      >
+    </p>
+
+    <script>
+      const tbody = document.getElementById("ordersBody");
+      const connState = document.getElementById("connState");
+      const rows = new Map(); // id -> <tr>
+
+      function fmtDate(iso) {
+        if (!iso) return "";
+        const d = new Date(iso);
+        return d.toLocaleString();
+      }
+
+      function renderItems(items) {
+        if (!items || !items.length) return '<span class="muted">—</span>';
+        return items
+          .map(
+            (i) =>
+              `<span class="pill">${i.quantity}× ${escapeHtml(i.name)}</span>`
+          )
+          .join(" ");
+      }
+
+      function escapeHtml(s) {
+        return String(s).replace(
+          /[&<>"']/g,
+          (ch) =>
+            ({
+              "&": "&amp;",
+              "<": "&lt;",
+              ">": "&gt;",
+              '"': "&quot;",
+              "'": "&#39;",
+            }[ch])
+        );
+      }
+
+      function statusClass(s) {
+        switch (s) {
+          case "pending":
+            return "status pending";
+          case "rejected":
+            return "status rejected";
+          case "preparing":
+            return "status preparing";
+          case "ready":
+            return "status ready";
+          default:
+            return "status";
+        }
+      }
+
+      function makeRow(order) {
+        const tr = document.createElement("tr");
+        tr.id = `row-${order.id}`;
+
+        tr.innerHTML = `
+        <td><code>${order.id}</code></td>
+        <td>#${order.user_id}</td>
+        <td>#${order.restaurant_id}</td>
+        <td><span class="${statusClass(order.status)}">${escapeHtml(
+          order.status
+        )}</span></td>
+        <td>${renderItems(order.items)}</td>
+        <td>${fmtDate(order.created_at)}</td>
+        <td>${fmtDate(order.updated_at)}</td>
+      `;
+        return tr;
+      }
+
+      function upsertRow(order, highlight = true) {
+        const existing = rows.get(order.id);
+        if (existing) {
+          existing.children[3].innerHTML = `<span class="${statusClass(
+            order.status
+          )}">${escapeHtml(order.status)}</span>`;
+          existing.children[4].innerHTML = renderItems(order.items);
+          existing.children[6].textContent = fmtDate(order.updated_at);
+          if (highlight) {
+            existing.classList.remove("highlight");
+            // force reflow
+            void existing.offsetWidth;
+            existing.classList.add("highlight");
+          }
+        } else {
+          const tr = makeRow(order);
+          tbody.prepend(tr);
+          rows.set(order.id, tr);
+          if (highlight) tr.classList.add("highlight");
+        }
+      }
+
+      // SSE bağlan
+      const es = new EventSource("http://localhost:8888/events/orders");
+
+      es.addEventListener("open", () => {
+        connState.textContent = "Bağlı ✔";
+      });
+
+      es.addEventListener("error", (e) => {
+        // CONNECTING ise normal: tarayıcı otomatik yeniden bağlanıyor
+        if (es.readyState === EventSource.CONNECTING) {
+          connState.textContent = "Yeniden bağlanılıyor…";
+        } else {
+          // CLOSED veya başka bir şeyse gerçek hata
+          connState.textContent =
+            "Bağlantı kapandı (CLOSED). Yeniden yüklemeyi deneyin.";
+          console.error("SSE CLOSED/HATA:", e);
+        }
+      });
+
+      // İlk snapshot tüm siparişler
+      es.addEventListener("snapshot", (e) => {
+        try {
+          const list = JSON.parse(e.data);
+          tbody.innerHTML = "";
+          rows.clear();
+          for (const order of list) upsertRow(order, false);
+          connState.textContent = `Bağlı ✔ • ${list.length} kayıt`;
+        } catch (err) {
+          console.error("snapshot parse", err);
+        }
+      });
+
+      // Sonraki olaylar: { type: "created"|"status_changed", order: {...} }
+      es.addEventListener("order", (e) => {
+        try {
+          const payload = JSON.parse(e.data);
+          upsertRow(payload.order, true);
+        } catch (err) {
+          console.error("order event parse", err);
+        }
+      });
+    </script>
+  </body>
+</html>
